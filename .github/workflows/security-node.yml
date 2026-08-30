@@ -190,9 +190,32 @@ jobs:
           configs=""
           for c in $SEMGREP_RULESETS; do configs="$configs --config $c"; done
           if [ "$BLOCKING" = "true" ]; then gate="--error"; else gate=""; fi
+          # Two outputs from one scan. `--sarif --output FILE` sends the SARIF
+          # to the file and prints NOTHING to the console, so a blocking gate
+          # would fail without ever saying what it blocked on -- the findings
+          # existed only inside an artefact that a private repo cannot upload.
+          # A gate you have to reverse-engineer is a gate people disable.
           semgrep scan $configs \
-            --sarif --output semgrep.sarif \
+            --sarif-output=semgrep.sarif \
+            --text-output=semgrep.txt \
             --metrics=off $gate
+
+      - name: Report findings
+        # Runs even when the gate above failed -- which is exactly when the
+        # findings need to be readable.
+        if: always()
+        run: |
+          if [ -s semgrep.txt ]; then
+            cat semgrep.txt
+            {
+              echo "### Semgrep findings"
+              echo '```'
+              cat semgrep.txt
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No Semgrep findings." | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Upload SARIF
         # Private repos need GitHub Advanced Security for Code Scanning upload.
