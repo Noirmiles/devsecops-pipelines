@@ -1,0 +1,183 @@
+# Reusable security pipeline for Python repositories.
+#
+# Call it from a repo with:
+#
+#   jobs:
+#     security:
+#       uses: Noirmiles/devsecops-pipelines/.github/workflows/security-python.yml@main
+#       permissions:
+#         contents: read
+#         security-events: write
+#       with:
+#         working-directory: apps/core
+#
+# Same four gates as security-node.yml, with pip-audit in place of npm audit.
+# See that file's header for why the gates are separate jobs, and see README.md
+# for the GitHub-expression trap the blocking inputs are written around.
+
+name: Security (Python)
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: "Python version to audit against."
+        type: string
+        default: "3.12"
+      working-directory:
+        description: "Directory containing pyproject.toml / requirements.txt."
+        type: string
+        default: "."
+      install-command:
+        description: >-
+          How to install the project's dependencies so pip-audit can see the
+          resolved set. Defaults to an editable install.
+        type: string
+        default: 'pip install -e "."'
+      trivy-severity:
+        type: string
+        default: "CRITICAL,HIGH"
+      semgrep-config:
+        type: string
+        default: "p/python p/security-audit p/secrets"
+      blocking:
+        description: >-
+          When false, gates report findings without failing the build.
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  secrets:
+    name: Secrets (gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks
+        env:
+          GITLEAKS_VERSION: "8.30.1"
+          GITLEAKS_SHA256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+        run: |
+          set -euo pipefail
+          url="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSfL "$url" -o gitleaks.tar.gz
+          echo "${GITLEAKS_SHA256}  gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks.tar.gz gitleaks
+          sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      - name: Scan full history
+        env:
+          BLOCKING: ${{ inputs.blocking }}
+        run: |
+          if [ "$BLOCKING" = "true" ]; then code=1; else code=0; fi
+          gitleaks git . --redact --verbose --exit-code "$code"
+
+  deps:
+    name: Dependencies (pip-audit)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Install project and pip-audit
+        run: |
+          python -m pip install --upgrade pip
+          ${{ inputs.install-command }}
+          pip install pip-audit
+
+      - name: Audit
+        # --skip-editable excludes the project itself: an editable install is
+        # not on PyPI, so there is no advisory data to audit it against.
+        #
+        # Note the absence of --strict, deliberately: --strict fails on any
+        # package it *skipped*, so with --skip-editable this gate could never
+        # pass on a project that installs itself.
+        env:
+          BLOCKING: ${{ inputs.blocking }}
+        run: |
+          if [ "$BLOCKING" = "true" ]; then
+            pip-audit --skip-editable --desc
+          else
+            pip-audit --skip-editable --desc || true
+          fi
+
+  sast:
+    name: SAST (Semgrep)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install semgrep
+
+      - name: Scan
+        env:
+          BLOCKING: ${{ inputs.blocking }}
+          SEMGREP_RULESETS: ${{ inputs.semgrep-config }}
+        run: |
+          configs=""
+          for c in $SEMGREP_RULESETS; do configs="$configs --config $c"; done
+          if [ "$BLOCKING" = "true" ]; then gate="--error"; else gate=""; fi
+          semgrep scan $configs \
+            --sarif --output semgrep.sarif \
+            --metrics=off $gate
+
+      - name: Upload SARIF
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@6f5948dfacef28e207b48d0905cf90c03365536d # v3
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
+  scan:
+    name: Filesystem & config (Trivy)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Trivy (SARIF for Code Scanning)
+        uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297 # master
+        with:
+          scan-type: fs
+          scanners: vuln,secret,misconfig
+          format: sarif
+          output: trivy.sarif
+          severity: ${{ inputs.trivy-severity }}
+          exit-code: "0"
+
+      - name: Upload SARIF
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@6f5948dfacef28e207b48d0905cf90c03365536d # v3
+        with:
+          sarif_file: trivy.sarif
+          category: trivy
+
+      - name: Trivy (gate)
+        uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297 # master
+        with:
+          scan-type: fs
+          scanners: vuln,secret,misconfig
+          format: table
+          severity: ${{ inputs.trivy-severity }}
+          exit-code: ${{ inputs.blocking && '1' || '0' }}
