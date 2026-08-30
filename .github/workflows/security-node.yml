@@ -52,6 +52,22 @@ on:
         description: "Space-separated Semgrep rulesets."
         type: string
         default: "p/javascript p/typescript p/react p/security-audit p/secrets"
+      enable-secrets:
+        description: "Run the gitleaks secret-scanning gate."
+        type: boolean
+        default: true
+      enable-deps:
+        description: "Run the dependency-audit gate."
+        type: boolean
+        default: true
+      enable-sast:
+        description: "Run the Semgrep SAST gate."
+        type: boolean
+        default: true
+      enable-scan:
+        description: "Run the Trivy filesystem/config gate."
+        type: boolean
+        default: true
       blocking:
         description: >-
           When false, gates report findings without failing the build. Use for
@@ -65,6 +81,7 @@ permissions:
 jobs:
   secrets:
     name: Secrets (gitleaks)
+    if: ${{ inputs.enable-secrets }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -102,6 +119,7 @@ jobs:
 
   deps:
     name: Dependencies (npm audit)
+    if: ${{ inputs.enable-deps }}
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -148,6 +166,7 @@ jobs:
 
   sast:
     name: SAST (Semgrep)
+    if: ${{ inputs.enable-sast }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -188,6 +207,7 @@ jobs:
 
   scan:
     name: Filesystem & config (Trivy)
+    if: ${{ inputs.enable-scan }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

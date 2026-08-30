@@ -55,6 +55,16 @@ Both workflows accept:
 (default `high`). `security-python.yml` adds `python-version` (default `3.12`)
 and `install-command`.
 
+Each gate can also be turned off individually — `enable-secrets`, `enable-deps`,
+`enable-sast`, `enable-scan`, all defaulting to `true`. This exists for repos
+that already run a gate of their own and only want the ones they are missing;
+running two secret scanners over the same history is cost without signal.
+
+```yaml
+    with:
+      enable-deps: false      # this repo already audits prod deps in its own CI
+```
+
 ### Onboarding a repo with an existing backlog
 
 Start with `blocking: false`, triage what it finds, then remove the line:
