@@ -139,20 +139,28 @@ there is no shell to be explicit in — the `exit-code:` inputs to `trivy-action
 
 ## Requirements
 
-Calling a reusable workflow that lives in a **private** repository requires that
-repository to allow it:
+This repository is public, so any workflow may call it as-is. If you fork it and
+keep the fork **private**, the fork has to opt in before other repositories can
+call it:
 
 ```bash
-gh api -X PUT repos/Noirmiles/devsecops-pipelines/actions/permissions/access \
+gh api -X PUT repos/<owner>/<fork>/actions/permissions/access \
   -f access_level=user
 ```
 
-## Repositories using these workflows
+## Adoption
 
-| Repository | Workflow | Directory |
-|---|---|---|
-| `StockTime` | python + node | `apps/core`, `apps/web` |
-| `vylo-studio-web` | node | `.` |
-| `ThePopUpChair` | node | `.` |
-| `FlavazStylingTeam` | node | `.` |
-| `HouseOfPho_Site` | node | `.` |
+Five repositories call these workflows today. The per-gate toggles exist because
+adoption is rarely all-or-nothing — a repo whose own CI already runs `npm audit`,
+or a monorepo that would otherwise be scanned twice, enables only the gates it is
+actually missing.
+
+| Repository | Workflow | Directory | Notes |
+|---|---|---|---|
+| Python + Next.js monorepo | python + node | `apps/core`, `apps/web` | two callers; `web` disables secrets + scan so the repo is not scanned twice |
+| Next.js marketing site | node | `.` | all four gates |
+| Next.js marketing site | node | `.` | all four gates |
+| Next.js marketing site | node | `.` | secrets + deps disabled; covered by the repo's own `ci.yml` |
+| Next.js marketing site | node | `.` | all four gates |
+
+All callers block on CRITICAL/HIGH and expose `workflow_dispatch` for on-demand runs.
