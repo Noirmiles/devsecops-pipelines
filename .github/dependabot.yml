@@ -1,0 +1,10 @@
+# The workflows here pin every third-party action to a commit SHA, which is the
+# right call for supply-chain integrity and also means nothing updates them
+# unless something is watching. This is that something.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
