@@ -198,15 +198,39 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
+      # trivy-action forces a bad choice: its newest release (v0.36.0, April) is
+      # four months behind its own master, so pinning the tag runs an older
+      # scanner, and pinning master leaves a SHA that no tag can vouch for.
+      # Installing the release directly removes the choice -- explicit version,
+      # checksum-verified download, one less third-party action holding a token.
+      #
+      # Bump both values together; the checksum is published by the Trivy
+      # release at trivy_<version>_checksums.txt.
+      - name: Install Trivy
+        env:
+          TRIVY_VERSION: "0.74.0"
+          TRIVY_SHA256: "2ae6fe3ee734b7fdf11335663e18c75ea12dccc76062f09f164a3b0f8be4371a"
+        run: |
+          set -euo pipefail
+          url="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          curl -sSfL "$url" -o trivy.tar.gz
+          echo "${TRIVY_SHA256}  trivy.tar.gz" | sha256sum -c -
+          tar -xzf trivy.tar.gz trivy
+          sudo install -m 0755 trivy /usr/local/bin/trivy
+          trivy --version
+
       - name: Trivy (SARIF for Code Scanning)
-        uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297 # master
-        with:
-          scan-type: fs
-          scanners: vuln,secret,misconfig
-          format: sarif
-          output: trivy.sarif
-          severity: ${{ inputs.trivy-severity }}
-          exit-code: "0"
+        # Never fails: --exit-code 0. The gate below is what blocks.
+        env:
+          TRIVY_SEVERITY: ${{ inputs.trivy-severity }}
+        run: |
+          set -euo pipefail
+          trivy fs . \
+            --scanners vuln,secret,misconfig \
+            --format sarif \
+            --output trivy.sarif \
+            --severity "$TRIVY_SEVERITY" \
+            --exit-code 0
 
       - name: Upload SARIF
         if: always()
@@ -217,10 +241,19 @@ jobs:
           category: trivy
 
       - name: Trivy (gate)
-        uses: aquasecurity/trivy-action@d2a0b60797ff03db6132bd4e2b293f9b37081297 # master
-        with:
-          scan-type: fs
-          scanners: vuln,secret,misconfig
-          format: table
-          severity: ${{ inputs.trivy-severity }}
-          exit-code: ${{ inputs.blocking && '1' || '0' }}
+        # The blocking decision is made in shell against an env var rather than
+        # in a `with:` expression. A gate in this repo was once written the
+        # expression way and silently stopped blocking, because an empty string
+        # is falsy in a GitHub expression -- there is no shell inside a `with:`
+        # block to be explicit in, and that is the whole problem.
+        env:
+          TRIVY_SEVERITY: ${{ inputs.trivy-severity }}
+          BLOCKING: ${{ inputs.blocking }}
+        run: |
+          set -euo pipefail
+          if [ "$BLOCKING" = "true" ]; then code=1; else code=0; fi
+          trivy fs . \
+            --scanners vuln,secret,misconfig \
+            --format table \
+            --severity "$TRIVY_SEVERITY" \
+            --exit-code "$code"
